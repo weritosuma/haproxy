@@ -225,10 +225,187 @@ services:
 
 ---
 
+### **7. HAProxy в Kubernetes: Интеграция с Микросервисами**
+HAProxy можно использовать в Kubernetes для балансировки трафика между микросервисами. Вот как это сделать:
+
+---
+
+#### **7.1. Варианты Использования**
+1. **Как Ingress Controller**:  
+   HAProxy может выступать альтернативой Nginx Ingress Controller, предоставляя расширенные возможности балансировки.
+2. **Как Sidecar-Контейнер**:  
+   Размещается в одном Pod'е с микросервисом для внутренней балансировки.
+3. **Как Внешний Балансировщик**:  
+   Управляется вне кластера для маршрутизации внешнего трафика.
+
+---
+
+#### **7.2. Пример: HAProxy как Ingress Controller**
+**Шаг 1: Установка HAProxy Ingress Controller**
+```bash
+kubectl apply -f https://raw.githubusercontent.com/haproxytech/kubernetes-ingress/master/deploy/haproxy-ingress.yaml
+```
+
+**Шаг 2: Создание Ingress-Ресурса**
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: haproxy-ingress
+  annotations:
+    kubernetes.io/ingress.class: "haproxy"
+spec:
+  rules:
+  - host: app.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app-service
+            port:
+              number: 80
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 80
+```
+
+**Шаг 3: Настройка Балансировки через ConfigMap**  
+Создайте `haproxy-configmap.yaml`:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+  namespace: haproxy-controller
+data:
+  backend-server-slot-increment: "32"
+  balance-algorithm: "roundrobin"
+  ssl-redirect: "true"
+```
+
+---
+
+#### **7.3. Пример: HAProxy как Sidecar для Микросервиса**
+**Шаг 1: Создание Deployment с HAProxy и Приложением**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: microservice-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: microservice
+  template:
+    metadata:
+      labels:
+        app: microservice
+    spec:
+      containers:
+      - name: app
+        image: your-microservice:latest
+        ports:
+        - containerPort: 8080
+      - name: haproxy
+        image: haproxy:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: haproxy-config
+          mountPath: /usr/local/etc/haproxy/
+      volumes:
+      - name: haproxy-config
+        configMap:
+          name: haproxy-sidecar-config
+```
+
+**Шаг 2: Конфигурация HAProxy для Sidecar**
+Создайте `haproxy-sidecar-config.yaml`:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-sidecar-config
+data:
+  haproxy.cfg: |
+    global
+      log stdout format raw local0
+
+    defaults
+      mode http
+      timeout connect 5s
+      timeout client 30s
+      timeout server 30s
+
+    frontend local_front
+      bind *:80
+      default_backend microservice_back
+
+    backend microservice_back
+      balance roundrobin
+      server local-app 127.0.0.1:8080 check
+```
+
+---
+
+#### **7.4. Пример: Динамическое Обновление Конфигурации**
+HAProxy в Kubernetes может автоматически обновлять бэкенды при изменении Pod'ов. Для этого используется интеграция с Kubernetes API через аннотации:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-service
+  annotations:
+    haproxy.org/check: "true"
+    haproxy.org/backend-config-snippet: |
+      balance leastconn
+      option httpchk GET /health
+spec:
+  selector:
+    app: microservice
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+```
+
+---
+
+#### **7.5. Проверка Работы в Kubernetes**
+1. **Проверка Ingress**:
+   ```bash
+   kubectl get ingress
+   curl -H "Host: app.example.com" http://<EXTERNAL-IP>
+   ```
+
+2. **Проверка Sidecar**:
+   ```bash
+   kubectl port-forward pod/microservice-deployment-xxxx 8080:80
+   curl http://localhost:8080
+   ```
+
+3. **Мониторинг**:
+   Используйте `kubectl logs` для просмотра логов HAProxy:
+   ```bash
+   kubectl logs -n haproxy-controller deployment/haproxy-ingress -c haproxy
+   ```
+
+---
+
 ### **Итог**
 HAProxy — мощный инструмент для балансировки нагрузки, поддерживающий:
 - **Гибкие алгоритмы**: Round Robin, Least Connections, URI Hash и др.  
 - **Маршрутизацию через ACL**: По доменам, путям, заголовкам.  
-- **Интеграцию с Docker**: Легкое развертывание и масштабирование.  
+- **Интеграцию с Docker и Kubernetes**: Как Ingress Controller, sidecar или внешний балансировщик.  
 
-Примеры конфигураций и настроек демонстрируют работу с реальными сценариями (веб-серверы, API, статика).
+Примеры конфигураций и настроек демонстрируют работу с реальными сценариями (веб-серверы, API, статика, микросервисы).
